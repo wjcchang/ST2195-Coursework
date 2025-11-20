@@ -16,18 +16,22 @@ Extended the algorithm to compute statistics such as sample mean, variance, and 
 Generated scatter plots of R-hat values against step values.
 Validated convergence by filtering out R-hat values greater than 2.5.
 📝 Part 2: Flight Data Analysis
+
 Part 2a
 Loaded and managed flight data using SQLite databases.
 Analyzed delays by time of day and day of week (2000–2004).
 Found that morning flights and Thursdays/Saturdays had the lowest delays.
+
 Part 2b
 Merged aircraft data to calculate plane ages.
 Examined correlation between aircraft age and delays using linear regression.
 Concluded that older planes tended to have slightly more delays, though correlation was weak.
+
 Part 2c
 Built a logistic regression model to predict flight diversions.
 Addressed class imbalance with oversampling.
 Achieved ~60–62% accuracy, with Month and DayOfWeek emerging as the most influential features.
+
 🛠️ Tools & Technologies
 Languages: R, Python
 Database: SQLite
