@@ -1,0 +1,167 @@
+# Load necessary libraries
+library(data.table)
+library(ggplot2)
+library(RSQLite)
+library(caret)
+library(dplyr)
+library(readr)
+library(broom)
+library(gridExtra)
+
+# Set working directory
+setwd('/Users/wjc1/Desktop/Programming for data science/ST2195 Coursework/Cw datasets')
+
+# Remove existing database if exists
+if (file.exists("airline_v2.db")) file.remove("airline_v2.db")
+
+# Connect to new SQLite database
+conn <- dbConnect(SQLite(), "airline_v2.db")
+
+# Load CSVs
+airports <- fread("airports.csv")
+carriers <- fread("carriers.csv")
+
+# Use read.csv for plane-data.csv due to parsing issues
+planes <- read.csv("plane-data.csv", stringsAsFactors = FALSE)
+setDT(planes)
+
+# Dynamically detect and rename the tail number column
+possible_tailnum <- grep("(?i)tail\\s*num", colnames(planes), value = TRUE, perl = TRUE)
+if (length(possible_tailnum) == 1) {
+  setnames(planes, possible_tailnum, "tailnum")
+} else {
+  stop("Tail number column not found or ambiguous. Found: ", paste(possible_tailnum, collapse = ", "))
+}
+
+# Write to SQLite
+dbWriteTable(conn, "airports", airports, overwrite = TRUE)
+dbWriteTable(conn, "carriers", carriers, overwrite = TRUE)
+dbWriteTable(conn, "planes", planes, overwrite = TRUE)
+
+# Load all years of ontime data
+years <- 2004:2008
+ontime_list <- lapply(years, function(y) fread(paste0(y, ".csv.bz2")))
+ontime <- rbindlist(ontime_list)
+
+# Part 2(a) - Delay analysis
+Delays <- copy(ontime)
+Delays[, TimeofDay := fifelse(CRSDepTime >= 500 & CRSDepTime < 1200, "Morning",
+                       fifelse(CRSDepTime >= 1200 & CRSDepTime < 1700, "Afternoon",
+                       fifelse(CRSDepTime >= 1700 & CRSDepTime < 2100, "Evening", "Night")))]
+
+days <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+Delays[, Day := days[DayOfWeek]]
+Delays[, arrdelay := ifelse(ArrDelay > 0, ArrDelay, NA)]
+Delays <- Delays[, .(AvgDelay = mean(arrdelay, na.rm=TRUE)), by = .(Year, Day, TimeofDay)]
+
+# Heatmap Plotting
+plot_heatmap <- function(df, row, col, row_order, col_order, title) {
+  df[[row]] <- factor(df[[row]], levels=row_order)
+  df[[col]] <- factor(df[[col]], levels=col_order)
+  ggplot(df, aes_string(x=col, y=row, fill="AvgDelay")) +
+    geom_tile(color="white") +
+    scale_fill_gradient(low="white", high="red") +
+    theme_minimal() +
+    labs(title=title, x=col, y=row)
+}
+
+print(plot_heatmap(Delays, "Year", "TimeofDay", sort(unique(Delays$Year)), c("Morning", "Afternoon", "Evening", "Night"), "Avg Delay by Time of Day"))
+print(plot_heatmap(Delays, "Year", "Day", sort(unique(Delays$Year)), days, "Avg Delay by Day of Week"))
+
+# Disconnect database
+dbDisconnect(conn)
+
+# Part 2(b) - Plane age vs delay correlation
+correlation_results <- list()
+par(mfrow=c(2,3))
+for (year in years) {
+  dt <- fread(paste0(year, ".csv.bz2"))[, .(tailnum = TailNum, ArrDelay, flight_year = Year)]
+  merged <- merge(dt, planes[, .(tailnum, issue_date)], by="tailnum", all.x=TRUE)
+  merged <- merged[!is.na(issue_date) & !is.na(ArrDelay)]
+  merged[, issue_date := as.IDate(issue_date, format="%m/%d/%Y")]
+  merged[, plane_age := flight_year - year(issue_date)]
+  merged <- merged[plane_age >= 0 & ArrDelay >= 0]
+  grouped <- merged[, .(average_delay = mean(ArrDelay)), by = plane_age]
+  plot(grouped$plane_age, grouped$average_delay, main=paste("Year", year),
+       xlab="Plane Age", ylab="Avg Delay", pch=19, col="blue")
+  abline(lm(average_delay ~ plane_age, data=grouped), col="red")
+  corr <- cor(grouped$plane_age, grouped$average_delay)
+  correlation_results[[as.character(year)]] <- corr
+}
+par(mfrow=c(1,1))
+for (yr in names(correlation_results)) {
+  cat(sprintf("Year %s: Correlation = %.3f\n", yr, correlation_results[[yr]]))
+}
+
+
+
+# Part 2(c) - Logistic Regression for Diversion 
+library(data.table)
+library(ggplot2)
+library(broom)        # For tidy()
+library(gridExtra)    # For grid.arrange()
+
+years <- 2004:2008
+plot_list_2c <- list()
+
+for (yr in years) {
+  file_name <- paste0(yr, ".csv.bz2")
+  
+  if (file.exists(file_name)) {
+    message("Processing: ", file_name)
+    
+    ontime <- tryCatch({
+      fread(file_name)
+    }, error = function(e) {
+      warning("Failed to read file: ", file_name, "\nError: ", e$message)
+      return(NULL)
+    })
+    
+    if (!is.null(ontime)) {
+      # Logistic Regression Section
+
+      # Select and rename relevant columns
+      ontime <- ontime[, .(flight_year = Year,
+                           flight_month = Month,
+                           flight_day = DayofMonth,
+                           day_of_week = DayOfWeek,
+                           dep_time = CRSDepTime,
+                           arr_time = CRSArrTime,
+                           distance = Distance,
+                           origin = Origin,
+                           destination = Dest,
+                           diverted = Diverted)]
+      
+      # Convert diverted to factor
+      ontime[, diverted := as.factor(diverted)]
+      
+      # Remove rows with NA
+      model_data <- na.omit(ontime[, .(diverted, flight_month, flight_day, day_of_week, dep_time, arr_time, distance)])
+      
+      # Fit logistic regression model
+      model <- glm(diverted ~ flight_month + flight_day + day_of_week + dep_time + arr_time + distance,
+                   data = model_data, family = binomial)
+      
+      # Extract coefficients
+      coeff_df <- tidy(model)
+      coeff_df <- coeff_df[coeff_df$term != "(Intercept)", ]
+      coeff_df$year <- as.character(yr)
+      
+      # Plot coefficients
+      plot <- ggplot(coeff_df, aes(x = reorder(term, estimate), y = estimate)) +
+        geom_bar(stat = "identity", fill = "darkgreen", color = "black") +
+        coord_flip() +
+        theme_minimal() +
+        labs(title = paste("Logistic Regression Coefficients - Year", yr),
+             x = "Model Terms", y = "Estimate")
+      
+      # Save to plot list
+      plot_list_2c[[as.character(yr)]] <- plot
+    }
+  } else {
+    warning("File not found: ", file_name)
+  }
+}
+
+# Display plots in a grid
+do.call(grid.arrange, c(plot_list_2c, ncol = 2))

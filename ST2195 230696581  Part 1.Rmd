@@ -1,0 +1,96 @@
+# Load necessary package
+library(ggplot2)
+
+# Target distribution: Laplace distribution (mean=0, b=1)
+laplace_density <- function(x) {
+  0.5 * exp(-abs(x))
+}
+
+# Custom Random Walk Metropolis sampler
+run_rw_metropolis <- function(total_samples, proposal_sd, start_point) {
+  result <- numeric(total_samples)
+  result[1] <- start_point
+  
+  for (i in 2:total_samples) {
+    candidate <- rnorm(1, mean = result[i - 1], sd = proposal_sd)
+    acceptance_ratio <- laplace_density(candidate) / laplace_density(result[i - 1])
+    
+    if (runif(1) < acceptance_ratio) {
+      result[i] <- candidate
+    } else {
+      result[i] <- result[i - 1]
+    }
+  }
+  
+  return(result)
+}
+
+# --- Part 1(a): Sampling and Visualization ---
+
+# Settings
+num_samples <- 10000
+initial_value <- 0
+proposal_sd <- 1
+
+# Generate sample path
+metropolis_samples <- run_rw_metropolis(num_samples, proposal_sd, initial_value)
+
+# Prepare data for plotting
+x_range <- seq(-5, 5, length.out = 1000)
+density_values <- laplace_density(x_range)
+plot_df <- data.frame(x = x_range, target_density = density_values)
+sample_df <- data.frame(samples = metropolis_samples)
+
+# Visualize using ggplot2
+ggplot() +
+  geom_histogram(data = sample_df, aes(x = samples, y = ..density.., fill = "Sample Histogram"),
+                 bins = 50, color = "black", alpha = 0.6) +
+  geom_line(data = plot_df, aes(x = x, y = target_density, color = "True Laplace Density"), size = 1.2) +
+  geom_density(data = sample_df, aes(x = samples, color = "Empirical Density"), adjust = 1.2, size = 1) +
+  scale_fill_manual(name = NULL, values = c("Sample Histogram" = "gray")) +
+  scale_color_manual(name = NULL, values = c("True Laplace Density" = "blue", "Empirical Density" = "red")) +
+  labs(title = "Metropolis Sampling of Laplace Distribution", x = "Value", y = "Density") +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+# Output sample statistics
+cat("Estimated Mean:", mean(metropolis_samples), "\n")
+cat("Estimated Std Dev:", sd(metropolis_samples), "\n")
+
+
+# --- Part 1(b): Convergence Diagnostics (R-hat) ---
+
+# R-hat diagnostic function
+calculate_r_hat <- function(sample_chains) {
+  k <- length(sample_chains)
+  chain_means <- sapply(sample_chains, mean)
+  chain_vars <- sapply(sample_chains, var)
+  
+  grand_mean <- mean(chain_means)
+  B <- sum((chain_means - grand_mean)^2) / (k - 1)
+  W <- mean(chain_vars)
+  
+  var_hat <- ((k - 1) * W / k) + B
+  sqrt(var_hat / W)
+}
+
+# Settings
+num_chains <- 4
+samples_per_chain <- 2000
+proposal_sds <- seq(0.001, 1, length.out = 100)
+rhat_results <- numeric(length(proposal_sds))
+
+# Loop through different proposal SDs and compute R-hat
+for (i in seq_along(proposal_sds)) {
+  sd_val <- proposal_sds[i]
+  chains <- lapply(1:num_chains, function(i) run_rw_metropolis(samples_per_chain, sd_val, rnorm(1)))
+  rhat_results[i] <- calculate_r_hat(chains)
+}
+
+# Plot R-hat vs proposal SD
+plot(proposal_sds, rhat_results, type = "l", col = "blue", lwd = 2,
+     main = "Gelman-Rubin Diagnostic (R-hat)", xlab = "Proposal SD", ylab = "R-hat")
+abline(h = 1.05, col = "red", lty = 2)
+legend("topright", legend = c("R-hat Value", "Threshold = 1.05"),
+       col = c("blue", "red"), lty = c(1, 2), lwd = 2)
+grid()
