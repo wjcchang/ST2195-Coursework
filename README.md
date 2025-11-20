@@ -15,8 +15,8 @@ Part 1b
 Extended the algorithm to compute statistics such as sample mean, variance, and between-sample variance.
 Generated scatter plots of R-hat values against step values.
 Validated convergence by filtering out R-hat values greater than 2.5.
-📝 Part 2: Flight Data Analysis
 
+📝 Part 2: Flight Data Analysis
 Part 2a
 Loaded and managed flight data using SQLite databases.
 Analyzed delays by time of day and day of week (2000–2004).
